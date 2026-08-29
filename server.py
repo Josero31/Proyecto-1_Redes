@@ -22,7 +22,6 @@ Supported JSON-RPC methods:
   - tools/call                 (request)
   - ping                       (request)
 
-Course: CC3067 Redes - Universidad del Valle de Guatemala
 """
 
 import sys
@@ -471,12 +470,19 @@ def process_message(raw_line):
 
 
 def main():
+    # Force UTF-8 on stdin/stdout regardless of the OS console codepage
+    # (important on Windows, where the default may not be UTF-8).
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+
     log = open("server.log", "a", encoding="utf-8")
     log.write(f"\n--- server started {datetime.datetime.now().isoformat()} ---\n")
     log.flush()
 
     for line in sys.stdin:
-        line = line.strip()
+        # Strip a UTF-8 BOM if present (Windows/PowerShell often prepends
+        # one to the first line of a text stream) plus surrounding whitespace.
+        line = line.lstrip("\ufeff").strip()
         if not line:
             continue
 

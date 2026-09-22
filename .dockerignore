@@ -1,0 +1,8 @@
+*.log
+__pycache__/
+*.pyc
+.git
+.gitignore
+test_requests.jsonl
+README.md
+chatbot/

@@ -31,19 +31,41 @@ not in the LLM, so it cannot be bypassed by prompting.
 ## 1. Architecture
 
 ```
-┌─────────────┐        JSON-RPC 2.0        ┌──────────────────────┐
-│  MCP Host   │ ───────  over stdio  ────── │  server.py           │
-│ (chatbot)   │ ◄────────────────────────── │  (this MCP server)   │
-└─────────────┘         stdin/stdout        └──────────────────────┘
+                           stdio (subprocess)
+                    ┌──────────────────────────────┐
+                    │                               ▼
+┌───────────────────┴───┐   JSON-RPC 2.0    ┌───────────────────┐
+│  chatbot/chatbot.py    │ ── over stdio ──► │  server.py        │
+│  (MCP host + LLM       │ ◄──────────────── │  pharmacy-local   │
+│   client, talks to     │                   └───────────────────┘
+│   Anthropic's API)     │
+│                        │   JSON-RPC 2.0    ┌───────────────────┐
+│                        │ ── over HTTP ────►│  remote_server.py │
+│                        │ ◄──────────────── │  pharmacy-remote  │
+│                        │   POST /mcp       │  (deployed to a   │
+│                        │                   │   cloud platform) │
+│                        │                   └───────────────────┘
+│                        │   JSON-RPC 2.0    ┌───────────────────┐
+│                        │ ── over stdio ────► official Filesystem│
+│                        │ ◄──────────────── │ / Git MCP servers │
+└────────────────────────┘                   └───────────────────┘
 ```
 
-- **Transport**: stdio. The host spawns `python3 server.py` as a subprocess
-  and communicates by writing one JSON-RPC message per line to the process's
-  `stdin`, and reading one JSON-RPC message per line from its `stdout`.
+Both `server.py` (local) and `remote_server.py` (remote) import their tools,
+data, and JSON-RPC message handling from **`pharmacy_logic.py`** — the two
+servers are functionally identical; only the transport differs:
+
+- **`server.py`** — stdio transport. The host spawns `python server.py` as a
+  subprocess and communicates by writing one JSON-RPC message per line to
+  the process's `stdin`, and reading one JSON-RPC message per line from its
+  `stdout`.
+- **`remote_server.py`** — HTTP transport (`POST /mcp`), meant to be deployed
+  to a cloud platform so a remote host can reach it over the network. See
+  section 9.
 - **Protocol version**: `2025-06-18`.
 - **State**: kept in memory for the lifetime of the process (medications,
-  stock, orders). Every request/response pair is also appended to
-  `server.log` for debugging.
+  stock, orders). Every request/response pair is also appended to a log
+  file (`server.log` / `remote_server.log`) for debugging.
 
 ## 2. Requirements
 
@@ -232,8 +254,249 @@ error cases: attempting to order a prescription-only medication
 (`MED8`, Amoxicillin), an invalid order ID, and a symptom with no mapped
 medication.
 
-## 8. Project status
+## 8. Shared logic module (`pharmacy_logic.py`)
 
-This is the **local MCP server** deliverable (partial submission). It is not
-yet wired into a chatbot host — that integration, plus the remote version of
-this same server, are part of later phases of this project.
+`pharmacy_logic.py` contains the tools, seed data, and JSON-RPC message
+handling used by **both** `server.py` and `remote_server.py`. If you modify
+a tool's behavior, edit it there once and both transports pick it up.
+
+## 9. Remote MCP server (`remote_server.py`)
+
+The same pharmacy tools, deployed so they can be reached over the network
+instead of only as a local subprocess. Implemented manually with Python's
+standard library `http.server` — no web framework, no MCP SDK.
+
+### 9.1 Transport
+
+Simplified MCP **Streamable HTTP**:
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/mcp` | `POST` | Body = one JSON-RPC 2.0 message (request or notification). A request gets a JSON-RPC response back in the body. A notification gets an empty `202 Accepted`. |
+| `/health` | `GET` | Plain liveness check for the hosting platform (not part of MCP). |
+
+The server reads the port to listen on from the `PORT` environment variable
+(defaults to `8080`), which is what Cloud Run (and most PaaS providers)
+expect. On `initialize`, the server issues an `Mcp-Session-Id` response
+header; if the client sends it back on later requests it is accepted, but
+it isn't required (this server's state isn't partitioned per-session — same
+single in-memory store as the local server).
+
+### 9.2 Running it locally
+
+```bash
+python remote_server.py
+# -> Pharmacy MCP remote server listening on http://0.0.0.0:8080/mcp
+
+curl http://localhost:8080/health
+curl -X POST http://localhost:8080/mcp -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+```
+
+### 9.3 Deploying it for free (Render)
+
+[Render](https://render.com) has a genuinely free web service tier — no
+credit card required, you sign up with your GitHub account, and it builds
+straight from the `Dockerfile` already in this repo.
+
+1. Push this repo to GitHub if you haven't (`git push`, section 3).
+2. Go to [dashboard.render.com](https://dashboard.render.com) → sign up /
+   log in with GitHub.
+3. **New** → **Web Service** → pick your `Proyecto-1_Redes` repo → grant
+   Render access if prompted.
+4. Render should auto-detect the `Dockerfile`. If asked:
+   - **Runtime**: Docker
+   - **Instance Type**: **Free**
+   - Leave the build/start command blank (the `Dockerfile`'s `CMD` handles
+     it) and don't set a `PORT` env var yourself — Render injects its own
+     `PORT`, and `remote_server.py` already reads it from the environment.
+5. Click **Create Web Service**. First build/deploy takes a couple of
+   minutes; Render shows you the public URL, e.g.
+   `https://pharmacy-mcp-remote.onrender.com`.
+6. Verify it's up: `curl https://<your-app>.onrender.com/health`.
+7. Put `https://<your-app>.onrender.com/mcp` in
+   `chatbot/servers_config.json` under `pharmacy-remote.url`, set
+   `"enabled": true`.
+
+> **Free-tier quirk**: the service spins down after ~15 minutes of no
+> traffic and takes 30-50s to wake up on the next request — normal for the
+> free plan, just send one request and wait before your demo/Wireshark
+> capture so it's already warm.
+
+> Google Cloud Run (also has a free tier, but requires a Google Cloud
+> account with billing verification) or any other platform that runs a
+> Dockerfile and reads `PORT` from the environment (Fly.io, Railway, etc.)
+> works the same way — just point `pharmacy-remote.url` at wherever it ends
+> up.
+
+### 9.4 Example usage
+
+Same 6 tools as the local server (section 6) — `search_medication_by_symptom`,
+`get_medication_details`, `check_stock`, `create_order`, `get_order_status`,
+`list_customer_orders` — same parameters, same responses, just called over
+HTTP instead of stdio.
+
+## 10. Chatbot (MCP host) — `chatbot/`
+
+A command-line chatbot that connects an Anthropic Claude model to one or
+more MCP servers and lets the model call their tools. This is the **host**
+in MCP terminology: it owns the connection to the LLM, discovers tools from
+each configured MCP server, and routes the model's tool calls to the right
+server.
+
+Implemented manually: `chatbot/mcp_client.py` is a small JSON-RPC 2.0 client
+(stdio and HTTP transports) written directly against the protocol, not an
+MCP SDK.
+
+### 10.1 Setup
+
+```bash
+cd chatbot
+python -m venv .venv
+./.venv/Scripts/activate        # Windows PowerShell: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env            # then edit .env and paste your key
+```
+
+Get a free Anthropic API key (comes with $5 of free credit) at
+[console.anthropic.com](https://console.anthropic.com). Put it in
+`chatbot/.env`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### 10.2 Configuring which MCP servers to use
+
+Edit `chatbot/servers_config.json`. Each server has `enabled: true/false`:
+
+```json
+{
+  "name": "pharmacy-local",
+  "enabled": true,
+  "transport": "stdio",
+  "command": ["python", "../server.py"]
+}
+```
+
+By default only `pharmacy-local` is enabled. To also use the remote server,
+set `pharmacy-remote.enabled` to `true` and fill in its `url` (section 9.3).
+For the official Filesystem/Git servers, see section 11.
+
+### 10.3 Running it
+
+```bash
+python chatbot.py
+```
+
+```
+Connecting to MCP server 'pharmacy-local' (stdio)...
+  -> 6 tool(s): search_medication_by_symptom, get_medication_details, ...
+
+Ready. 6 tool(s) available. Type 'exit' to quit.
+
+You: tengo dolor de cabeza, que me recomiendas?
+  [tool call] pharmacy-local__search_medication_by_symptom({"symptom": "dolor de cabeza"})
+
+Bot: Te recomiendo Paracetamol 500mg o Ibuprofeno 400mg, ambos disponibles
+sin receta. Recuerda que esto no reemplaza el consejo de un médico...
+```
+
+### 10.4 What gets logged
+
+- `chatbot/logs/conversation.log` — every user message, assistant reply, and
+  tool result, timestamped.
+- `chatbot/logs/mcp_<server-name>.log` — every raw JSON-RPC message sent to
+  and received from that specific MCP server (one file per server). This is
+  the log referenced by functionality #3 of the project (log of all MCP
+  server interactions).
+
+## 11. Official MCP servers (Filesystem, Git)
+
+The chatbot can also drive Anthropic's official reference MCP servers,
+unmodified, through the same `chatbot/mcp_client.py`.
+
+### 11.1 Filesystem server
+
+Requires Node.js (`npx` comes with it). No install step needed —
+`npx -y @modelcontextprotocol/server-filesystem <dir>` fetches and runs it
+on first use. In `servers_config.json`, set `filesystem.enabled` to `true`;
+it's scoped to `chatbot/workspace/` by default (create that folder first).
+
+### 11.2 Git server
+
+Requires the official Python package:
+
+```bash
+pip install mcp-server-git
+```
+
+Then set `git.enabled` to `true` in `servers_config.json` (it also points at
+`chatbot/workspace/`).
+
+### 11.3 Demo: create a repo, add a README, commit
+
+With both servers enabled and `chatbot/workspace/` existing:
+
+```
+You: create a new git repository in the workspace, then create a README.md
+     file in it that says "Pharmacy chatbot demo", add it, and commit it
+     with the message "initial commit"
+```
+
+The model will call the filesystem server's `write_file` tool to create
+`README.md`, then the git server's `git_init`, `git_add`, and `git_commit`
+tools in sequence — you'll see each `[tool call] ...` line printed, and the
+full JSON-RPC exchange in `chatbot/logs/mcp_filesystem.log` and
+`chatbot/logs/mcp_git.log`.
+
+## 12. Capturing and analyzing traffic with Wireshark
+
+This applies to the **remote** server (section 9) — the local server talks
+over stdio (no network packets to capture) and the point of this analysis is
+the host↔remote-server traffic over the network.
+
+1. Deploy `remote_server.py` (section 9.3), or run it locally and have the
+   chatbot connect to it via `http://localhost:8080/mcp` if you only need to
+   demonstrate the protocol exchange rather than genuine internet traffic.
+2. Open Wireshark, start a capture on the interface that carries the
+   traffic (your Wi-Fi/Ethernet adapter for a real cloud URL; `Npcap
+   Loopback Adapter` on Windows for `localhost`).
+3. Filter to just this traffic, e.g. `tcp.port == 443` (cloud, HTTPS) or
+   `tcp.port == 8080` (local HTTP) — add `and http` for the local case since
+   plain HTTP is inspectable, whereas HTTPS to Cloud Run will be encrypted
+   at the TLS layer (you'll still see the TCP/TLS handshake and segments,
+   just not the plaintext JSON-RPC — mention this in the report).
+4. In `chatbot/servers_config.json`, enable `pharmacy-remote` and run
+   `python chatbot.py`; send a few messages that trigger tool calls
+   (`check_stock`, `create_order`, etc.).
+5. Stop the capture and, in the JSON-RPC exchange (or the decrypted HTTP
+   stream if you tested against `localhost`), classify each message:
+   - **Synchronization / handshake**: the TCP three-way handshake (`SYN`,
+     `SYN, ACK`, `ACK`), and the MCP `initialize` request +
+     `notifications/initialized` notification.
+   - **Requests**: `tools/list`, `tools/call` (`POST /mcp` frames sent by
+     the chatbot).
+   - **Responses**: the JSON-RPC `result`/`error` bodies sent back by
+     `remote_server.py` (`HTTP/1.1 200 OK` frames).
+6. Save the capture (`.pcapng`) alongside your report — it's already
+   git-ignored so it won't bloat the repo; attach it separately per your
+   catedrático's instructions.
+
+## 13. Project status
+
+- **Local MCP server** (`server.py` + `pharmacy_logic.py`): done — first
+  partial submission.
+- **Remote MCP server** (`remote_server.py` + `Dockerfile`): implemented and
+  tested locally; deploying it to a live cloud URL (section 9.3) is a step
+  only you can run, since it needs your own cloud account.
+- **Chatbot / MCP host** (`chatbot/`): implemented and tested against the
+  local server; connecting it to the LLM needs your own Anthropic API key
+  (section 10.1), and connecting it to the deployed remote server needs the
+  URL from the step above.
+- **Official Filesystem/Git servers** (section 11): wired into the same
+  host; Filesystem needs Node.js (`npx`), Git needs `pip install
+  mcp-server-git`.
+- **Wireshark capture and OSI/TCP-IP layer analysis** (section 12): needs to
+  be performed by you with Wireshark running locally, against a live
+  chatbot ↔ remote-server session.

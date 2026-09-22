@@ -1,3 +1,14 @@
 server.log
+remote_server.log
 __pycache__/
 *.pyc
+
+# Chatbot (host)
+chatbot/.env
+chatbot/.venv/
+chatbot/logs/
+chatbot/workspace/
+
+# Wireshark captures
+*.pcap
+*.pcapng

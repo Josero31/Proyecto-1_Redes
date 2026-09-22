@@ -14,7 +14,7 @@
     },
     {
       "name": "filesystem",
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
       "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
     },

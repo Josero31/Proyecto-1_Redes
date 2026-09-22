@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -109,8 +110,14 @@ class StdioMCPClient(BaseMCPClient):
         full_env = os.environ.copy()
         if env:
             full_env.update(env)
+        # On Windows, commands like "npx" are actually "npx.cmd", which
+        # Popen won't resolve on its own (CreateProcess doesn't consult
+        # PATHEXT the way cmd.exe does) -- shutil.which does, so resolve
+        # the real executable path ourselves before spawning it.
+        resolved = shutil.which(command[0])
+        full_command = [resolved or command[0], *command[1:]]
         self._proc = subprocess.Popen(
-            command,
+            full_command,
             cwd=cwd,
             env=full_env,
             stdin=subprocess.PIPE,

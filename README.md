@@ -521,6 +521,59 @@ the host↔remote-server traffic over the network.
    git-ignored so it won't bloat the repo; attach it separately per your
    catedrático's instructions.
 
+### 12.1 Captures already taken (this session)
+
+Both captures below were taken with `tshark` and are sitting in the project
+root (git-ignored, attach them to your report separately):
+
+**`wireshark_local_capture.pcapng`** — chatbot ↔ `remote_server.py` running
+on `localhost:8080` (loopback, plain HTTP), covering one full turn:
+`initialize` → `notifications/initialized` → `tools/list` →
+`search_medication_by_symptom` → `get_medication_details` → `create_order`.
+Because plain HTTP isn't encrypted, the full JSON-RPC bodies are visible.
+Findings:
+- Each JSON-RPC call is its **own TCP connection** (`HttpMCPClient` doesn't
+  reuse connections, and the server is HTTP/1.0-style): a full
+  `SYN` → `SYN,ACK` → `ACK` handshake, one `POST /mcp` request frame with
+  the JSON-RPC body, one `HTTP/1.0 200 OK` (or `202 Accepted` for the
+  `notifications/initialized` notification, which correctly gets no
+  JSON-RPC response body) response frame, then `FIN,ACK` from both sides.
+  Six such request/response cycles appear, one per JSON-RPC message sent.
+- Before almost every successful IPv4 (`127.0.0.1`) connection, Wireshark
+  shows 4-5 unanswered `SYN` retransmissions to `::1` (IPv6 loopback) on
+  the *same* port. This is `localhost` resolving to both an IPv4 and an
+  IPv6 address; Python's `urllib` tries IPv6 first, gets no response
+  (`remote_server.py` binds `0.0.0.0`, IPv4 only, so nothing answers on
+  `::1`), retries a few times, then falls back to IPv4, which succeeds
+  immediately. Worth a line in the network-layer part of your OSI writeup.
+- Example decoded payload (frame 16, `initialize` request):
+  `{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {...}}` —
+  confirms the wire format matches section 5.1 exactly.
+
+**`wireshark_render_capture.pcapng`** — chatbot ↔ the live Render URL
+(`https://proyecto-1-redes-3k10.onrender.com`) over the real internet,
+covering one `check_stock` call. Findings:
+- Real TCP handshake to Render's public IP (seen as `216.24.57.18` in this
+  capture — Render may assign a different one for you).
+- `TLSv1.2 Client Hello (SNI=proyecto-1-redes-3k10.onrender.com)` — the SNI
+  field is the one piece of the exchange visible in cleartext even over
+  HTTPS (it's how the server's reverse proxy knows which TLS certificate
+  to present); this is a good talking point for the application/transport
+  layer boundary in your report.
+- Server responds `TLSv1.3 Server Hello, Change Cipher Spec` — TLS 1.3 was
+  negotiated even though the ClientHello framed itself as 1.2 (normal:
+  1.2-framed ClientHello + a `supported_versions` extension is how TLS 1.3
+  stays compatible with older middleboxes).
+- Everything after the handshake is `Application Data` — the HTTP request
+  line, headers, and JSON-RPC body are all inside the encrypted TLS
+  record, unlike the local capture. This is the concrete evidence for your
+  report that the remote deployment is confidential in transit, at the
+  cost of not being able to inspect the JSON-RPC content directly from the
+  capture (cross-reference `chatbot/logs/mcp_pharmacy-remote.log` instead,
+  which has the plaintext of what went over that encrypted channel).
+- Same one-TCP-connection-per-request pattern as the local capture (`FIN`
+  then a client `RST` right after), for the same reason.
+
 ## 13. Project status
 
 - **Local MCP server** (`server.py` + `pharmacy_logic.py`): done — first
@@ -535,6 +588,8 @@ the host↔remote-server traffic over the network.
 - **Official Filesystem/Git servers** (section 11): enabled and tested end
   to end through the chatbot — creating `README.md` via Filesystem, then
   `git add` + `git commit` via Git, verified with `git log`.
-- **Wireshark capture and OSI/TCP-IP layer analysis** (section 12): needs to
-  be performed by you with Wireshark running locally, against a live
-  chatbot ↔ remote-server session.
+- **Wireshark capture and OSI/TCP-IP layer analysis** (section 12): two
+  captures already taken (local plaintext HTTP + real HTTPS to Render),
+  findings documented in section 12.1. Still needed from you: writing this
+  up into the formal report (incisos 8-10) in whatever format/template your
+  catedrático requires.

@@ -41,7 +41,7 @@ LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 CONVERSATION_LOG = LOG_DIR / "conversation.log"
 
-MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 MAX_TOKENS = 1024
 SYSTEM_PROMPT = (
     "You are the customer-facing chatbot for a pharmacy chain. You have "

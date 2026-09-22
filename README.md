@@ -345,7 +345,8 @@ server, and routes the model's tool calls to the right server.
 
 The LLM is [Groq](https://groq.com)'s API — **free**, no credit card
 required, OpenAI-compatible tool-calling format, and fast (runs open models
-like Llama 3.3 70B on their own inference hardware).
+like OpenAI's open-weight `gpt-oss` on their own inference hardware — check
+`groq_client.models.list()` for the current catalog, it changes over time).
 
 Implemented manually: `chatbot/mcp_client.py` is a small JSON-RPC 2.0 client
 (stdio and HTTP transports) written directly against the protocol, not an
@@ -367,7 +368,7 @@ Get a free Groq API key (no card needed) at
 
 ```
 GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 ```
 
 ### 10.2 Configuring which MCP servers to use

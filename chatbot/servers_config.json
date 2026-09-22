@@ -4,7 +4,7 @@
       "name": "pharmacy-local",
       "enabled": true,
       "transport": "stdio",
-      "command": ["python", "../server.py"]
+      "command": ["{python}", "../server.py"]
     },
     {
       "name": "pharmacy-remote",
@@ -20,9 +20,9 @@
     },
     {
       "name": "git",
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
-      "command": ["mcp-server-git", "--repository", "./workspace"]
+      "command": ["{python}", "-m", "mcp_server_git", "--repository", "./workspace"]
     }
   ]
 }

@@ -421,39 +421,72 @@ sin receta. Recuerda que esto no reemplaza el consejo de un médico...
 The chatbot can also drive Anthropic's official reference MCP servers,
 unmodified, through the same `chatbot/mcp_client.py`.
 
+Both are already enabled by default in `servers_config.json`. Their
+`command` uses the literal string `"{python}"` as the interpreter —
+`chatbot.py` substitutes that for `sys.executable` (the interpreter
+actually running the chatbot) before spawning them, so they pick up
+packages installed in `chatbot/.venv` even if you never ran `activate`.
+(`pharmacy-local`'s command does the same, for the same reason.)
+
 ### 11.1 Filesystem server
 
 Requires Node.js (`npx` comes with it). No install step needed —
 `npx -y @modelcontextprotocol/server-filesystem <dir>` fetches and runs it
-on first use. In `servers_config.json`, set `filesystem.enabled` to `true`;
-it's scoped to `chatbot/workspace/` by default (create that folder first).
+on first use, scoped to `chatbot/workspace/` (create that folder first —
+this is also the Filesystem server's sandbox: it refuses to touch anything
+outside it).
+
+> **Windows note:** `npx` is actually `npx.cmd`, which plain
+> `subprocess.Popen` can't resolve. `mcp_client.py`'s `StdioMCPClient`
+> already works around this with `shutil.which()` — nothing you need to do,
+> just don't remove that if you touch the client.
 
 ### 11.2 Git server
 
-Requires the official Python package:
+Requires the official `mcp-server-git` Python package, already listed in
+`chatbot/requirements.txt` (installed in section 10.1's `pip install -r
+requirements.txt`).
+
+**Important:** this reference server has no `git_init` tool — it expects
+`--repository` to already point at a valid Git repo, or every call fails
+with `"... is not a valid Git repository"`. Initialize it once, yourself,
+before enabling the server:
 
 ```bash
-pip install mcp-server-git
+git init chatbot/workspace
 ```
 
-Then set `git.enabled` to `true` in `servers_config.json` (it also points at
-`chatbot/workspace/`).
+(This nested repo lives entirely inside the already-git-ignored
+`chatbot/workspace/`, so it has no effect on this project's own repo.)
 
-### 11.3 Demo: create a repo, add a README, commit
+### 11.3 Demo: add a README and commit it
 
-With both servers enabled and `chatbot/workspace/` existing:
+With both servers enabled, `git init chatbot/workspace` already run once
+(section 11.2), and `python chatbot.py` running:
 
 ```
-You: create a new git repository in the workspace, then create a README.md
-     file in it that says "Pharmacy chatbot demo", add it, and commit it
-     with the message "initial commit"
+You: crea un archivo README.md en el workspace que diga "Pharmacy chatbot
+     demo", agregalo al staging con git y haz commit con el mensaje
+     "initial commit"
 ```
 
-The model will call the filesystem server's `write_file` tool to create
-`README.md`, then the git server's `git_init`, `git_add`, and `git_commit`
-tools in sequence — you'll see each `[tool call] ...` line printed, and the
-full JSON-RPC exchange in `chatbot/logs/mcp_filesystem.log` and
-`chatbot/logs/mcp_git.log`.
+Tested output:
+
+```
+  [tool call] filesystem__write_file({"content": "Pharmacy chatbot demo", "path": "README.md"})
+  [tool call] git__git_add({"files": ["README.md"], "repo_path": "workspace"})
+  [tool call] git__git_commit({"message": "initial commit", "repo_path": "workspace"})
+
+Bot: ¡Listo! He creado el archivo README.md con el contenido "Pharmacy
+chatbot demo", lo he añadido al área de staging y he realizado el commit
+con el mensaje "initial commit".
+```
+
+Verify independently with `cd chatbot/workspace && git log --oneline`.
+The model calls the filesystem server's `write_file` tool, then the git
+server's `git_add` and `git_commit` tools — you'll see each `[tool call]
+...` line printed, and the full JSON-RPC exchange in
+`chatbot/logs/mcp_filesystem.log` and `chatbot/logs/mcp_git.log`.
 
 ## 12. Capturing and analyzing traffic with Wireshark
 
@@ -499,9 +532,9 @@ the host↔remote-server traffic over the network.
 - **Chatbot / MCP host** (`chatbot/`): implemented and tested against both
   the local and the deployed remote server; connecting it to the LLM still
   needs your own free Groq API key (section 10.1).
-- **Official Filesystem/Git servers** (section 11): wired into the same
-  host; Filesystem needs Node.js (`npx`), Git needs `pip install
-  mcp-server-git`.
+- **Official Filesystem/Git servers** (section 11): enabled and tested end
+  to end through the chatbot — creating `README.md` via Filesystem, then
+  `git add` + `git commit` via Git, verified with `git log`.
 - **Wireshark capture and OSI/TCP-IP layer analysis** (section 12): needs to
   be performed by you with Wireshark running locally, against a live
   chatbot ↔ remote-server session.

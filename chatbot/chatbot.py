@@ -80,7 +80,13 @@ def load_servers() -> dict:
 
         try:
             if transport == "stdio":
-                client = StdioMCPClient(name, server_cfg["command"], cwd=str(BASE_DIR))
+                # "{python}" resolves to the interpreter running this
+                # chatbot, so stdio servers that need packages installed
+                # in chatbot/.venv (e.g. mcp-server-git) use the right
+                # one even if that venv was never "activated".
+                command = [sys.executable if part == "{python}" else part
+                           for part in server_cfg["command"]]
+                client = StdioMCPClient(name, command, cwd=str(BASE_DIR))
             elif transport == "http":
                 client = HttpMCPClient(name, server_cfg["url"])
             else:

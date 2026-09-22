@@ -487,13 +487,13 @@ the host↔remote-server traffic over the network.
 
 - **Local MCP server** (`server.py` + `pharmacy_logic.py`): done — first
   partial submission.
-- **Remote MCP server** (`remote_server.py` + `Dockerfile`): implemented and
-  tested locally; deploying it to a live cloud URL (section 9.3) is a step
-  only you can run, since it needs your own cloud account.
-- **Chatbot / MCP host** (`chatbot/`): implemented and tested against the
-  local server; connecting it to the LLM needs your own Anthropic API key
-  (section 10.1), and connecting it to the deployed remote server needs the
-  URL from the step above.
+- **Remote MCP server** (`remote_server.py` + `Dockerfile`): deployed and
+  live on Render at `https://proyecto-1-redes-3k10.onrender.com/mcp`
+  (`/health` and `initialize` verified working). Configured and enabled in
+  `chatbot/servers_config.json`.
+- **Chatbot / MCP host** (`chatbot/`): implemented and tested against both
+  the local and the deployed remote server; connecting it to the LLM still
+  needs your own Anthropic API key (section 10.1).
 - **Official Filesystem/Git servers** (section 11): wired into the same
   host; Filesystem needs Node.js (`npx`), Git needs `pip install
   mcp-server-git`.

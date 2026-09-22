@@ -8,9 +8,9 @@
     },
     {
       "name": "pharmacy-remote",
-      "enabled": false,
+      "enabled": true,
       "transport": "http",
-      "url": "https://REPLACE-WITH-YOUR-CLOUD-RUN-URL/mcp"
+      "url": "https://proyecto-1-redes-3k10.onrender.com/mcp"
     },
     {
       "name": "filesystem",

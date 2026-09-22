@@ -38,7 +38,7 @@ not in the LLM, so it cannot be bypassed by prompting.
 │  chatbot/chatbot.py    │ ── over stdio ──► │  server.py        │
 │  (MCP host + LLM       │ ◄──────────────── │  pharmacy-local   │
 │   client, talks to     │                   └───────────────────┘
-│   Anthropic's API)     │
+│   Groq's API)          │
 │                        │   JSON-RPC 2.0    ┌───────────────────┐
 │                        │ ── over HTTP ────►│  remote_server.py │
 │                        │ ◄──────────────── │  pharmacy-remote  │
@@ -338,11 +338,14 @@ HTTP instead of stdio.
 
 ## 10. Chatbot (MCP host) — `chatbot/`
 
-A command-line chatbot that connects an Anthropic Claude model to one or
-more MCP servers and lets the model call their tools. This is the **host**
-in MCP terminology: it owns the connection to the LLM, discovers tools from
-each configured MCP server, and routes the model's tool calls to the right
-server.
+A command-line chatbot that connects an LLM to one or more MCP servers and
+lets the model call their tools. This is the **host** in MCP terminology: it
+owns the connection to the LLM, discovers tools from each configured MCP
+server, and routes the model's tool calls to the right server.
+
+The LLM is [Groq](https://groq.com)'s API — **free**, no credit card
+required, OpenAI-compatible tool-calling format, and fast (runs open models
+like Llama 3.3 70B on their own inference hardware).
 
 Implemented manually: `chatbot/mcp_client.py` is a small JSON-RPC 2.0 client
 (stdio and HTTP transports) written directly against the protocol, not an
@@ -358,12 +361,13 @@ pip install -r requirements.txt
 cp .env.example .env            # then edit .env and paste your key
 ```
 
-Get a free Anthropic API key (comes with $5 of free credit) at
-[console.anthropic.com](https://console.anthropic.com). Put it in
-`chatbot/.env`:
+Get a free Groq API key (no card needed) at
+[console.groq.com/keys](https://console.groq.com/keys) — sign in, click
+"Create API Key". Put it in `chatbot/.env`:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
 ```
 
 ### 10.2 Configuring which MCP servers to use
@@ -493,7 +497,7 @@ the host↔remote-server traffic over the network.
   `chatbot/servers_config.json`.
 - **Chatbot / MCP host** (`chatbot/`): implemented and tested against both
   the local and the deployed remote server; connecting it to the LLM still
-  needs your own Anthropic API key (section 10.1).
+  needs your own free Groq API key (section 10.1).
 - **Official Filesystem/Git servers** (section 11): wired into the same
   host; Filesystem needs Node.js (`npx`), Git needs `pip install
   mcp-server-git`.

@@ -3,9 +3,10 @@
 Pharmacy Chatbot — MCP Host
 ============================
 
-The "host" in MCP terms: a command-line chatbot that talks to an
-Anthropic Claude model and gives it tools backed by one or more MCP
-servers (configured in servers_config.json):
+The "host" in MCP terms: a command-line chatbot that talks to an LLM
+(Groq's free API, OpenAI-compatible tool-calling format) and gives it
+tools backed by one or more MCP servers (configured in
+servers_config.json):
 
   - pharmacy-local   the local MCP server from server.py (stdio)
   - pharmacy-remote  the same server deployed to the cloud (HTTP)
@@ -29,7 +30,7 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from anthropic import Anthropic
+from groq import Groq
 
 from mcp_client import StdioMCPClient, HttpMCPClient, MCPError
 
@@ -40,7 +41,7 @@ LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 CONVERSATION_LOG = LOG_DIR / "conversation.log"
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 MAX_TOKENS = 1024
 SYSTEM_PROMPT = (
     "You are the customer-facing chatbot for a pharmacy chain. You have "
@@ -61,13 +62,13 @@ def log_conversation(role: str, text: str) -> None:
 def load_servers() -> dict:
     """Read servers_config.json, connect to every server with
     enabled: true, and return {tool_name: (client, original_tool_name)}
-    plus the Anthropic-format tool list."""
+    plus the OpenAI/Groq-format tool list."""
     config_path = BASE_DIR / "servers_config.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
     clients = []
     tool_routes = {}
-    anthropic_tools = []
+    groq_tools = []
 
     for server_cfg in config["servers"]:
         if not server_cfg.get("enabled", False):
@@ -99,13 +100,16 @@ def load_servers() -> dict:
             # across servers (e.g. two servers could both expose "search").
             routed_name = f"{name}__{tool['name']}"
             tool_routes[routed_name] = (client, tool["name"])
-            anthropic_tools.append({
-                "name": routed_name,
-                "description": tool.get("description", ""),
-                "input_schema": tool.get("inputSchema", {"type": "object", "properties": {}}),
+            groq_tools.append({
+                "type": "function",
+                "function": {
+                    "name": routed_name,
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema", {"type": "object", "properties": {}}),
+                },
             })
 
-    return {"clients": clients, "tool_routes": tool_routes, "anthropic_tools": anthropic_tools}
+    return {"clients": clients, "tool_routes": tool_routes, "groq_tools": groq_tools}
 
 
 def run_tool(tool_routes: dict, routed_name: str, arguments: dict) -> str:
@@ -124,24 +128,25 @@ def run_tool(tool_routes: dict, routed_name: str, arguments: dict) -> str:
 
 
 def main():
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        print("ERROR: set ANTHROPIC_API_KEY in chatbot/.env (see .env.example).")
+        print("ERROR: set GROQ_API_KEY in chatbot/.env (see .env.example). "
+              "Get a free key at https://console.groq.com/keys")
         sys.exit(1)
 
-    anthropic_client = Anthropic(api_key=api_key)
+    groq_client = Groq(api_key=api_key)
     registry = load_servers()
     tool_routes = registry["tool_routes"]
-    anthropic_tools = registry["anthropic_tools"]
+    groq_tools = registry["groq_tools"]
     clients = registry["clients"]
 
     if not clients:
         print("No MCP servers connected. Check servers_config.json.")
         sys.exit(1)
 
-    print(f"\nReady. {len(anthropic_tools)} tool(s) available. Type 'exit' to quit.\n")
+    print(f"\nReady. {len(groq_tools)} tool(s) available. Type 'exit' to quit.\n")
 
-    messages: list[dict] = []
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     try:
         while True:
@@ -155,37 +160,47 @@ def main():
             messages.append({"role": "user", "content": user_input})
 
             # Agentic loop: keep calling the model and running any tools
-            # it requests, until it responds without a tool_use block.
+            # it requests, until it responds without a tool call.
             while True:
-                response = anthropic_client.messages.create(
+                response = groq_client.chat.completions.create(
                     model=MODEL,
                     max_tokens=MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
                     messages=messages,
-                    tools=anthropic_tools,
+                    tools=groq_tools,
+                    tool_choice="auto",
                 )
 
-                messages.append({"role": "assistant", "content": response.content})
+                message = response.choices[0].message
+                tool_calls = message.tool_calls or []
 
-                tool_uses = [b for b in response.content if b.type == "tool_use"]
-                if not tool_uses:
-                    final_text = "".join(b.text for b in response.content if b.type == "text")
+                assistant_msg = {"role": "assistant", "content": message.content}
+                if tool_calls:
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ]
+                messages.append(assistant_msg)
+
+                if not tool_calls:
+                    final_text = message.content or ""
                     print(f"\nBot: {final_text}\n")
                     log_conversation("assistant", final_text)
                     break
 
-                tool_results = []
-                for tool_use in tool_uses:
-                    print(f"  [tool call] {tool_use.name}({json.dumps(tool_use.input, ensure_ascii=False)})")
-                    output = run_tool(tool_routes, tool_use.name, tool_use.input)
-                    log_conversation("tool", f"{tool_use.name} -> {output}")
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_use.id,
+                for tool_call in tool_calls:
+                    arguments = json.loads(tool_call.function.arguments or "{}")
+                    print(f"  [tool call] {tool_call.function.name}({json.dumps(arguments, ensure_ascii=False)})")
+                    output = run_tool(tool_routes, tool_call.function.name, arguments)
+                    log_conversation("tool", f"{tool_call.function.name} -> {output}")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
                         "content": output,
                     })
-
-                messages.append({"role": "user", "content": tool_results})
 
     except (KeyboardInterrupt, EOFError):
         print("\nBye.")
